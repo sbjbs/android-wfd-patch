@@ -1,0 +1,364 @@
+From 397a91fd814fdb187563953bb114092f08e825e3 Mon Sep 17 00:00:00 2001
+From: sbjbs <sbjbs121@gmail.com>
+Date: Tue, 8 Jan 2019 10:09:21 +0800
+Subject: [PATCH 3/5] Wifi-Display: Fix build errors
+
+Change-Id: I18129018fb34d12efcc72240b980e8ef2f087606
+---
+ media/libmedia/Android.bp                          |  1 +
+ media/libmediaplayerservice/Android.bp             |  4 ++++
+ media/libstagefright/SurfaceMediaSource.cpp        |  2 +-
+ media/libstagefright/wifi-display/Android.bp       |  2 ++
+ media/libstagefright/wifi-display/MediaSender.cpp  |  4 ++--
+ .../libstagefright/wifi-display/rtp/RTPSender.cpp  |  3 ++-
+ .../wifi-display/source/Converter.cpp              | 28 +++++++++++++++-------
+ .../wifi-display/source/MediaPuller.cpp            | 10 ++++----
+ .../wifi-display/source/PlaybackSession.cpp        |  4 ++--
+ .../wifi-display/source/RepeaterSource.cpp         |  7 +++---
+ .../wifi-display/source/RepeaterSource.h           |  4 ++--
+ .../wifi-display/source/TSPacketizer.cpp           |  6 ++---
+ 12 files changed, 48 insertions(+), 27 deletions(-)
+
+diff --git a/media/libmedia/Android.bp b/media/libmedia/Android.bp
+index 378bb60..7ad2505 100644
+--- a/media/libmedia/Android.bp
++++ b/media/libmedia/Android.bp
+@@ -217,6 +217,7 @@ cc_library {
+         "libstagefright_foundation",
+         "libmediaextractor",
+         "libgui",
++        "libui",
+         "libdl",
+         "libaudioutils",
+         "libaudioclient",
+diff --git a/media/libmediaplayerservice/Android.bp b/media/libmediaplayerservice/Android.bp
+index 4df6b18..744b98a 100644
+--- a/media/libmediaplayerservice/Android.bp
++++ b/media/libmediaplayerservice/Android.bp
+@@ -9,6 +9,7 @@ cc_library_shared {
+         "RemoteDisplay.cpp",
+         "StagefrightRecorder.cpp",
+         "TestPlayerStub.cpp",
++        "HDCP.cpp",
+     ],
+ 
+     shared_libs: [
+@@ -19,6 +20,7 @@ cc_library_shared {
+         "libcrypto",
+         "libcutils",
+         "libdl",
++        "libui",
+         "libgui",
+         "libhidlbase",
+         "libhidlmemory",
+@@ -34,6 +36,7 @@ cc_library_shared {
+         "libstagefright",
+         "libstagefright_foundation",
+         "libstagefright_httplive",
++        "libstagefright_wfd",
+         "libutils",
+     ],
+ 
+@@ -52,6 +55,7 @@ cc_library_shared {
+     include_dirs: [
+         "frameworks/av/media/libstagefright/rtsp",
+         "frameworks/av/media/libstagefright/webm",
++        "frameworks/av/media/libstagefright/wifi-display",
+     ],
+ 
+     local_include_dirs: ["include"],
+diff --git a/media/libstagefright/SurfaceMediaSource.cpp b/media/libstagefright/SurfaceMediaSource.cpp
+index 4b3076a..e56916f 100644
+--- a/media/libstagefright/SurfaceMediaSource.cpp
++++ b/media/libstagefright/SurfaceMediaSource.cpp
+@@ -355,7 +355,7 @@ status_t SurfaceMediaSource::read(
+ 
+     (*buffer)->setObserver(this);
+     (*buffer)->add_ref();
+-    (*buffer)->meta_data()->setInt64(kKeyTime, mCurrentTimestamp / 1000);
++    (*buffer)->meta_data().setInt64(kKeyTime, mCurrentTimestamp / 1000);
+     ALOGV("Frames encoded = %d, timestamp = %" PRId64 ", time diff = %" PRId64,
+             mNumFramesEncoded, mCurrentTimestamp / 1000,
+             mCurrentTimestamp / 1000 - prevTimeStamp / 1000);
+diff --git a/media/libstagefright/wifi-display/Android.bp b/media/libstagefright/wifi-display/Android.bp
+index fb08c5b..692ca1e 100644
+--- a/media/libstagefright/wifi-display/Android.bp
++++ b/media/libstagefright/wifi-display/Android.bp
+@@ -26,6 +26,8 @@ cc_library_shared {
+         "libcutils",
+         "liblog",
+         "libmedia",
++        "libmedia_omx",
++        "libmediaextractor",
+         "libstagefright",
+         "libstagefright_foundation",
+         "libui",
+diff --git a/media/libstagefright/wifi-display/MediaSender.cpp b/media/libstagefright/wifi-display/MediaSender.cpp
+index cc412f5..7aca2bd 100644
+--- a/media/libstagefright/wifi-display/MediaSender.cpp
++++ b/media/libstagefright/wifi-display/MediaSender.cpp
+@@ -23,7 +23,7 @@
+ #include "rtp/RTPSender.h"
+ #include "source/TSPacketizer.h"
+ 
+-#include "include/avc_utils.h"
++#include <media/stagefright/foundation/avc_utils.h>
+ 
+ #include <media/IHDCP.h>
+ #include <media/stagefright/MediaBuffer.h>
+@@ -400,7 +400,7 @@ status_t MediaSender::packetizeAccessUnit(
+     bool manuallyPrependSPSPPS =
+         !info.mIsAudio
+         && (info.mFlags & FLAG_MANUALLY_PREPEND_SPS_PPS)
+-        && IsIDR(accessUnit);
++        && IsIDR(accessUnit->data(), accessUnit->size());
+ 
+     if (mHDCP != NULL && !info.mIsAudio) {
+         isHDCPEncrypted = true;
+diff --git a/media/libstagefright/wifi-display/rtp/RTPSender.cpp b/media/libstagefright/wifi-display/rtp/RTPSender.cpp
+index ca9fdd2..f7d141f 100644
+--- a/media/libstagefright/wifi-display/rtp/RTPSender.cpp
++++ b/media/libstagefright/wifi-display/rtp/RTPSender.cpp
+@@ -28,7 +28,8 @@
+ #include <media/stagefright/MediaErrors.h>
+ #include <media/stagefright/Utils.h>
+ 
+-#include "include/avc_utils.h"
++#include <media/stagefright/foundation/avc_utils.h>
++#include <media/stagefright/foundation/ByteUtils.h>
+ 
+ namespace android {
+ 
+diff --git a/media/libstagefright/wifi-display/source/Converter.cpp b/media/libstagefright/wifi-display/source/Converter.cpp
+index 273af18..2b8db8e 100644
+--- a/media/libstagefright/wifi-display/source/Converter.cpp
++++ b/media/libstagefright/wifi-display/source/Converter.cpp
+@@ -21,12 +21,13 @@
+ #include "Converter.h"
+ 
+ #include "MediaPuller.h"
+-#include "include/avc_utils.h"
++#include <media/stagefright/foundation/avc_utils.h>
+ 
+ #include <cutils/properties.h>
+ #include <gui/Surface.h>
+ #include <media/ICrypto.h>
+ #include <media/MediaCodecBuffer.h>
++#include <media/MediaBufferHolder.h>
+ #include <media/stagefright/foundation/ABuffer.h>
+ #include <media/stagefright/foundation/ADebug.h>
+ #include <media/stagefright/foundation/AMessage.h>
+@@ -305,7 +306,8 @@ void Converter::onMessageReceived(const sp<AMessage> &msg) {
+                     sp<ABuffer> accessUnit;
+                     CHECK(msg->findBuffer("accessUnit", &accessUnit));
+ 
+-                    accessUnit->setMediaBufferBase(NULL);
++                    //accessUnit->setMediaBufferBase(NULL);
++                    accessUnit->meta()->setObject("mediaBufferHolder", new MediaBufferHolder(NULL));
+                 }
+                 break;
+             }
+@@ -328,7 +330,8 @@ void Converter::onMessageReceived(const sp<AMessage> &msg) {
+                         ALOGI("dropping frame.");
+                     }
+ 
+-                    accessUnit->setMediaBufferBase(NULL);
++                    //accessUnit->setMediaBufferBase(NULL);
++                    accessUnit->meta()->setObject("mediaBufferHolder", new MediaBufferHolder(NULL));
+                     break;
+                 }
+ 
+@@ -625,13 +628,20 @@ status_t Converter::feedEncoderInputBuffers() {
+                    buffer->data(),
+                    buffer->size());
+ 
+-            MediaBuffer *mediaBuffer =
+-                (MediaBuffer *)(buffer->getMediaBufferBase());
++            MediaBuffer *mediaBuffer = NULL;
++                //(MediaBuffer *)(buffer->getMediaBufferBase());
++            sp<RefBase> holder;
++            if (buffer->meta()->findObject("mediaBufferHolder", &holder)) {
++                mediaBuffer = (holder != nullptr) ?
++                        static_cast<MediaBuffer*>(static_cast<MediaBufferHolder*>(holder.get())->mediaBuffer()) : nullptr;
++            }
+             if (mediaBuffer != NULL) {
+-                mEncoderInputBuffers.itemAt(bufferIndex)->setMediaBufferBase(
+-                        mediaBuffer);
++                //mEncoderInputBuffers.itemAt(bufferIndex)->setMediaBufferBase(
++                //        mediaBuffer);
++                mEncoderInputBuffers.itemAt(bufferIndex)->meta()->setObject("mediaBufferHolder", new MediaBufferHolder(mediaBuffer));
+ 
+-                buffer->setMediaBufferBase(NULL);
++                //buffer->setMediaBufferBase(NULL);
++                buffer->meta()->setObject("mediaBufferHolder", new MediaBufferHolder(NULL));
+             }
+         } else {
+             flags = MediaCodec::BUFFER_FLAG_EOS;
+@@ -763,7 +773,7 @@ status_t Converter::doMoreWork() {
+                 if (mNeedToManuallyPrependSPSPPS
+                         && mIsH264
+                         && (mFlags & FLAG_PREPEND_CSD_IF_NECESSARY)
+-                        && IsIDR(buffer)) {
++                        && IsIDR(buffer->data(), buffer->size())) {
+                     buffer = prependCSD(buffer);
+                 }
+ 
+diff --git a/media/libstagefright/wifi-display/source/MediaPuller.cpp b/media/libstagefright/wifi-display/source/MediaPuller.cpp
+index ce07a4e..680738e 100644
+--- a/media/libstagefright/wifi-display/source/MediaPuller.cpp
++++ b/media/libstagefright/wifi-display/source/MediaPuller.cpp
+@@ -24,7 +24,8 @@
+ #include <media/stagefright/foundation/ADebug.h>
+ #include <media/stagefright/foundation/AMessage.h>
+ #include <media/stagefright/MediaBuffer.h>
+-#include <media/stagefright/MediaSource.h>
++#include <media/MediaSource.h>
++#include <media/MediaBufferHolder.h>
+ #include <media/stagefright/MetaData.h>
+ 
+ namespace android {
+@@ -139,7 +140,7 @@ void MediaPuller::onMessageReceived(const sp<AMessage> &msg) {
+             }
+ 
+             MediaBuffer *mbuf;
+-            status_t err = mSource->read(&mbuf);
++            status_t err = mSource->read((MediaBufferBase**)&mbuf);
+ 
+             if (mPaused) {
+                 if (err == OK) {
+@@ -163,7 +164,7 @@ void MediaPuller::onMessageReceived(const sp<AMessage> &msg) {
+                 notify->post();
+             } else {
+                 int64_t timeUs;
+-                CHECK(mbuf->meta_data()->findInt64(kKeyTime, &timeUs));
++                CHECK(mbuf->meta_data().findInt64(kKeyTime, &timeUs));
+ 
+                 sp<ABuffer> accessUnit = new ABuffer(mbuf->range_length());
+ 
+@@ -179,7 +180,8 @@ void MediaPuller::onMessageReceived(const sp<AMessage> &msg) {
+                 } else {
+                     // video encoder will release MediaBuffer when done
+                     // with underlying data.
+-                    accessUnit->setMediaBufferBase(mbuf);
++                    //accessUnit->setMediaBufferBase(mbuf);
++                    accessUnit->meta()->setObject("mediaBufferHolder", new MediaBufferHolder(mbuf));
+                 }
+ 
+                 sp<AMessage> notify = mNotify->dup();
+diff --git a/media/libstagefright/wifi-display/source/PlaybackSession.cpp b/media/libstagefright/wifi-display/source/PlaybackSession.cpp
+index f1ecca0..4440dd9 100644
+--- a/media/libstagefright/wifi-display/source/PlaybackSession.cpp
++++ b/media/libstagefright/wifi-display/source/PlaybackSession.cpp
+@@ -23,7 +23,7 @@
+ #include "Converter.h"
+ #include "MediaPuller.h"
+ #include "RepeaterSource.h"
+-#include "include/avc_utils.h"
++#include <media/stagefright/foundation/avc_utils.h>
+ #include "WifiDisplaySource.h"
+ 
+ #include <binder/IServiceManager.h>
+@@ -38,7 +38,7 @@
+ #include <media/stagefright/AudioSource.h>
+ #include <media/stagefright/MediaDefs.h>
+ #include <media/stagefright/MediaErrors.h>
+-#include <media/stagefright/MediaSource.h>
++#include <media/MediaSource.h>
+ #include <media/stagefright/MetaData.h>
+ #include <media/stagefright/NuMediaExtractor.h>
+ #include <media/stagefright/SurfaceMediaSource.h>
+diff --git a/media/libstagefright/wifi-display/source/RepeaterSource.cpp b/media/libstagefright/wifi-display/source/RepeaterSource.cpp
+index af6b663..50db8b6 100644
+--- a/media/libstagefright/wifi-display/source/RepeaterSource.cpp
++++ b/media/libstagefright/wifi-display/source/RepeaterSource.cpp
+@@ -9,6 +9,7 @@
+ #include <media/stagefright/foundation/AMessage.h>
+ #include <media/stagefright/MediaBuffer.h>
+ #include <media/stagefright/MetaData.h>
++#include <media/MediaBufferHolder.h>
+ 
+ namespace android {
+ 
+@@ -107,7 +108,7 @@ sp<MetaData> RepeaterSource::getFormat() {
+ }
+ 
+ status_t RepeaterSource::read(
+-        MediaBuffer **buffer, const ReadOptions *options) {
++        MediaBufferBase **buffer, const ReadOptions *options) {
+     int64_t seekTimeUs;
+     ReadOptions::SeekMode seekMode;
+     CHECK(options == NULL || !options->getSeekTo(&seekTimeUs, &seekMode));
+@@ -155,7 +156,7 @@ status_t RepeaterSource::read(
+             {
+                 mBuffer->add_ref();
+                 *buffer = mBuffer;
+-                (*buffer)->meta_data()->setInt64(kKeyTime, bufferTimeUs);
++                (*buffer)->meta_data().setInt64(kKeyTime, bufferTimeUs);
+                 ++mFrameCount;
+             }
+         }
+@@ -181,7 +182,7 @@ void RepeaterSource::onMessageReceived(const sp<AMessage> &msg) {
+         case kWhatRead:
+         {
+             MediaBuffer *buffer;
+-            status_t err = mSource->read(&buffer);
++            status_t err = mSource->read((MediaBufferBase**)&buffer);
+ 
+             ALOGV("read mbuf %p", buffer);
+ 
+diff --git a/media/libstagefright/wifi-display/source/RepeaterSource.h b/media/libstagefright/wifi-display/source/RepeaterSource.h
+index 8d414fd..dd51d8d 100644
+--- a/media/libstagefright/wifi-display/source/RepeaterSource.h
++++ b/media/libstagefright/wifi-display/source/RepeaterSource.h
+@@ -4,7 +4,7 @@
+ 
+ #include <media/stagefright/foundation/ABase.h>
+ #include <media/stagefright/foundation/AHandlerReflector.h>
+-#include <media/stagefright/MediaSource.h>
++#include <media/MediaSource.h>
+ 
+ #define SUSPEND_VIDEO_IF_IDLE   0
+ 
+@@ -20,7 +20,7 @@ struct RepeaterSource : public MediaSource {
+     virtual sp<MetaData> getFormat();
+ 
+     virtual status_t read(
+-            MediaBuffer **buffer, const ReadOptions *options);
++            MediaBufferBase **buffer, const ReadOptions *options);
+ 
+     void onMessageReceived(const sp<AMessage> &msg);
+ 
+diff --git a/media/libstagefright/wifi-display/source/TSPacketizer.cpp b/media/libstagefright/wifi-display/source/TSPacketizer.cpp
+index 865ba94..9791ed7 100644
+--- a/media/libstagefright/wifi-display/source/TSPacketizer.cpp
++++ b/media/libstagefright/wifi-display/source/TSPacketizer.cpp
+@@ -19,7 +19,7 @@
+ #include <utils/Log.h>
+ 
+ #include "TSPacketizer.h"
+-#include "include/avc_utils.h"
++#include <media/stagefright/foundation/avc_utils.h>
+ 
+ #include <media/stagefright/foundation/ABuffer.h>
+ #include <media/stagefright/foundation/ADebug.h>
+@@ -471,7 +471,7 @@ status_t TSPacketizer::packetize(
+     const sp<Track> &track = mTracks.itemAt(trackIndex);
+ 
+     if (track->isH264() && (flags & PREPEND_SPS_PPS_TO_IDR_FRAMES)
+-            && IsIDR(accessUnit)) {
++            && IsIDR(accessUnit->data(), accessUnit->size())) {
+         // prepend codec specific data, i.e. SPS and PPS.
+         accessUnit = track->prependCSD(accessUnit);
+     } else if (track->isAAC() && track->lacksADTSHeader()) {
+@@ -1039,7 +1039,7 @@ sp<ABuffer> TSPacketizer::prependCSD(
+     CHECK_LT(trackIndex, mTracks.size());
+ 
+     const sp<Track> &track = mTracks.itemAt(trackIndex);
+-    CHECK(track->isH264() && IsIDR(accessUnit));
++    CHECK(track->isH264() && IsIDR(accessUnit->data(), accessUnit->size()));
+ 
+     int64_t timeUs;
+     CHECK(accessUnit->meta()->findInt64("timeUs", &timeUs));
+-- 
+1.9.1
+

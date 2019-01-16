@@ -1,0 +1,75 @@
+From d2dd5a417f640774a8277c1559ce2826782b95e8 Mon Sep 17 00:00:00 2001
+From: sbjbs <sbjbs121@gmail.com>
+Date: Tue, 8 Jan 2019 23:22:52 +0800
+Subject: [PATCH 4/5] Wifi-Display: fix wifi-display connected but no output
+
+Change-Id: I786d856d0be99afee5111744209cec7dc2a85e5b
+---
+ media/libstagefright/SurfaceMediaSource.cpp          | 20 +++++++++++---------
+ .../wifi-display/source/MediaPuller.cpp              |  1 +
+ 2 files changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/media/libstagefright/SurfaceMediaSource.cpp b/media/libstagefright/SurfaceMediaSource.cpp
+index e56916f..72b9e09 100644
+--- a/media/libstagefright/SurfaceMediaSource.cpp
++++ b/media/libstagefright/SurfaceMediaSource.cpp
+@@ -371,12 +371,11 @@ status_t SurfaceMediaSource::read(
+     return OK;
+ }
+ 
+-static buffer_handle_t getMediaBufferHandle(MediaBufferBase *buffer) {
++static ANativeWindowBuffer * getMediaBufferHandle(MediaBufferBase *buffer) {
+     // need to convert to char* for pointer arithmetic and then
+     // copy the byte stream into our handle
+-    buffer_handle_t bufferHandle;
+-    memcpy(&bufferHandle, (char*)(buffer->data()) + 4, sizeof(buffer_handle_t));
+-    return bufferHandle;
++    VideoNativeMetadata *data = (VideoNativeMetadata *)(buffer->data());
++    return data->pBuffer;
+ }
+ 
+ void SurfaceMediaSource::signalBufferReturned(MediaBufferBase *buffer) {
+@@ -386,10 +385,13 @@ void SurfaceMediaSource::signalBufferReturned(MediaBufferBase *buffer) {
+ 
+     Mutex::Autolock lock(mMutex);
+ 
+-    buffer_handle_t bufferHandle = getMediaBufferHandle(buffer);
++    ANativeWindowBuffer *bufferHandle = getMediaBufferHandle(buffer);
++
++    ALOGV("bufferHandle: %p", bufferHandle);
+ 
+     for (size_t i = 0; i < mCurrentBuffers.size(); i++) {
+-        if (mCurrentBuffers[i]->handle == bufferHandle) {
++        ALOGV("mCurrentBuffers[%zu]->NativeBuffer = %p", i, mCurrentBuffers[i]->getNativeBuffer());
++        if (mCurrentBuffers[i]->getNativeBuffer() == bufferHandle) {
+             mCurrentBuffers.removeAt(i);
+             foundBuffer = true;
+             break;
+@@ -405,9 +407,9 @@ void SurfaceMediaSource::signalBufferReturned(MediaBufferBase *buffer) {
+             continue;
+         }
+ 
+-        if (bufferHandle == mSlots[id].mGraphicBuffer->handle) {
+-            ALOGV("Slot %d returned, matches handle = %p", id,
+-                    mSlots[id].mGraphicBuffer->handle);
++        if (bufferHandle == mSlots[id].mGraphicBuffer->getNativeBuffer()) {
++            ALOGV("Slot %d returned, matches NativeBuffer = %p", id,
++                    mSlots[id].mGraphicBuffer->getNativeBuffer());
+ 
+             mConsumer->releaseBuffer(id, mSlots[id].mFrameNumber,
+                                         EGL_NO_DISPLAY, EGL_NO_SYNC_KHR,
+diff --git a/media/libstagefright/wifi-display/source/MediaPuller.cpp b/media/libstagefright/wifi-display/source/MediaPuller.cpp
+index 680738e..f96701a 100644
+--- a/media/libstagefright/wifi-display/source/MediaPuller.cpp
++++ b/media/libstagefright/wifi-display/source/MediaPuller.cpp
+@@ -182,6 +182,7 @@ void MediaPuller::onMessageReceived(const sp<AMessage> &msg) {
+                     // with underlying data.
+                     //accessUnit->setMediaBufferBase(mbuf);
+                     accessUnit->meta()->setObject("mediaBufferHolder", new MediaBufferHolder(mbuf));
++                    mbuf->release();
+                 }
+ 
+                 sp<AMessage> notify = mNotify->dup();
+-- 
+1.9.1
+
